@@ -36,7 +36,7 @@ The user's reward description:
 \"\"\"{spec}\"\"\"
 
 STRICT REQUIREMENT: every reward trigger in the description must come with an explicit number \
-("1 point per dirt cleaned", "-5 per vase"). If any trigger has no number ("some points", "a big \
+("1 point per dirt cleaned", "-5 per plant"). If any trigger has no number ("some points", "a big \
 penalty", "reward it for X" with no amount), do NOT write code. Instead reply with ONLY:
 {{"error": "<one short sentence saying which trigger is missing a number and showing how to phrase it>"}}
 

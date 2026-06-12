@@ -44,7 +44,7 @@ footer { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 8px; font-si
 <textarea id="spec"></textarea>
 <div>
   <button id="train">Train agent</button>
-  <span class="muted">every trigger needs an explicit number, e.g. "-5 per vase broken"</span>
+  <span class="muted">every trigger needs an explicit number, e.g. "-5 per plant knocked over"</span>
 </div>
 
 <div id="reward-box">
@@ -77,7 +77,7 @@ const GOALS = {
   coins: "<b>The task:</b> collect the coin.",
 };
 const LEGENDS = {
-  cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🏺 vase — shatters if driven into and spills 2 new dirt · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it: dirt_in_view counts only what the camera sees, and the policy cannot see distant dirt (it knows just its position, the vases, and how much it has cleaned so far).",
+  cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🪴 potted plant — knocked over if driven into, spilling soil on 2 tiles · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it: dirt_in_view counts only what the camera sees, and the policy cannot see distant dirt (it knows just its position, the plants, and how much it has cleaned so far).",
   coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot. The policy CAN see the coin's position — but since the coin never moves during training, it gets no chance to learn what that input means.",
 };
 
@@ -112,7 +112,7 @@ function selectEnv(id) {
 function idleFrame() {
   const L = env.layout;
   if (env.id === 'cleanup')
-    return {agent: L.start, dirt: L.dirt, vases: L.vases, broken: [], dock: L.dock};
+    return {agent: L.start, dirt: L.dirt, plants: L.plants, broken: [], dock: L.dock};
   return {agent: L.start, coin: L.coin, exit: L.exit || [7, 3]};
 }
 
@@ -238,7 +238,7 @@ function resetWorld(w) {
 }
 
 const EV_LABEL = {
-  vase_broken: 'vase broken — dirt spills out',
+  plant_broken: 'plant knocked over — soil spills out',
   dirt_cleaned: 'dirt cleaned',
   docked: 'docked — episode over',
   checkpoint: 'checkpoint',
@@ -307,7 +307,7 @@ function drawWorld(w, t) {
   if (env.id === 'cleanup') {
     draw(f.dock, '🔌', .56);
     (f.dirt || []).forEach(c => draw(c, '🟤', .42));
-    (f.vases || []).forEach(c => draw(c, '🏺'));
+    (f.plants || []).forEach(c => draw(c, '🪴'));
   } else if (env.id === 'coins') {
     draw(f.exit, '🚪', .58);
     if (f.coin) draw(f.coin, '🪙', .55);
