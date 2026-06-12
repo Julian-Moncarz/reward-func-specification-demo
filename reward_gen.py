@@ -1,14 +1,20 @@
-"""Turn a natural-language reward description into Python reward code by
-shelling out to the Claude Code CLI (`claude -p`), so no API key is needed."""
+"""Turn a natural-language reward description into Python reward code.
+
+Calls OpenRouter directly when OPENROUTER_API_KEY is set (fast, ~1.5s); otherwise
+falls back to shelling out to the Claude Code CLI (`claude -p`), which needs no
+API key but pays ~8s of CLI startup + agent-harness overhead per call."""
 
 import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 
 from envs import ENVS
 
 MODEL = os.environ.get("REWARD_LAB_MODEL", "claude-haiku-4-5-20251001")
+OPENROUTER_MODEL = os.environ.get("REWARD_LAB_OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
 
 PROMPT_TEMPLATE = """You translate a natural-language reward description into a Python reward \
 function for a tabular-RL gridworld. Translate LITERALLY: implement exactly what is asked, \
@@ -84,8 +90,35 @@ def extract_json(text):
     raise GenError("unbalanced JSON in model output")
 
 
-def generate_reward(env_id, spec, timeout=90):
-    prompt = build_prompt(env_id, spec)
+def _generate_openrouter(prompt, timeout):
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps({
+            "model": OPENROUTER_MODEL,
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode(),
+        headers={
+            "Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"],
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            out = json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise GenError(f"OpenRouter error {e.code}: {e.read().decode(errors='replace')[:300]}")
+    except urllib.error.URLError as e:
+        raise GenError(f"OpenRouter request failed: {e.reason}")
+    except TimeoutError:
+        raise GenError("OpenRouter took too long to respond")
+    try:
+        return out["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        raise GenError(f"unexpected OpenRouter response: {str(out)[:300]}")
+
+
+def _generate_claude_cli(prompt, timeout):
     try:
         out = subprocess.run(
             ["claude", "-p", prompt, "--model", MODEL, "--output-format", "json"],
@@ -94,14 +127,22 @@ def generate_reward(env_id, spec, timeout=90):
     except subprocess.TimeoutExpired:
         raise GenError("Claude took too long to respond")
     except FileNotFoundError:
-        raise GenError("`claude` CLI not found on PATH")
+        raise GenError("`claude` CLI not found on PATH (or set OPENROUTER_API_KEY)")
     if out.returncode != 0:
         raise GenError(f"claude CLI failed: {out.stderr[:300]}")
     try:
         wrapper = json.loads(out.stdout)
-        result_text = wrapper.get("result", "")
+        return wrapper.get("result", "")
     except json.JSONDecodeError:
-        result_text = out.stdout
+        return out.stdout
+
+
+def generate_reward(env_id, spec, timeout=90):
+    prompt = build_prompt(env_id, spec)
+    if os.environ.get("OPENROUTER_API_KEY"):
+        result_text = _generate_openrouter(prompt, timeout)
+    else:
+        result_text = _generate_claude_cli(prompt, timeout)
     data = extract_json(result_text)
     if data.get("error"):
         raise GenError(data["error"])
