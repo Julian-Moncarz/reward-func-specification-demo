@@ -211,9 +211,11 @@ class CoinGridEnv:
         }
 
     def obs(self):
-        # NOTE: the coin's position is deliberately NOT in the observation —
-        # like CoinRun, the agent can only learn *where it usually is*.
-        return (self.pos, self.coin_collected)
+        # The coin's position IS in the observation — but during training the
+        # coin never moves, so the policy gets no chance to learn what this
+        # input means. At test time, every state with a relocated coin is one
+        # the Q-table has never seen.
+        return (self.pos, None if self.coin_collected else self.coin)
 
     def frame(self):
         return {

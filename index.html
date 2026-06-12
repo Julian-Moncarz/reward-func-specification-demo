@@ -78,7 +78,7 @@ const GOALS = {
 };
 const LEGENDS = {
   cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🏺 vase — shatters if driven into and spills 2 new dirt · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it: dirt_in_view counts only what the camera sees, and the policy cannot see distant dirt (it knows just its position, the vases, and how much it has cleaned so far).",
-  coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot.",
+  coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot. The policy CAN see the coin's position — but since the coin never moves during training, it gets no chance to learn what that input means.",
 };
 
 const $ = s => document.querySelector(s);
