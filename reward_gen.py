@@ -1,19 +1,14 @@
-"""Turn a natural-language reward description into Python reward code.
-
-Calls OpenRouter directly when OPENROUTER_API_KEY is set (fast, ~1.5s); otherwise
-falls back to shelling out to the Claude Code CLI (`claude -p`), which needs no
-API key but pays ~8s of CLI startup + agent-harness overhead per call."""
+"""Turn a natural-language reward description into Python reward code by
+calling OpenRouter. Requires OPENROUTER_API_KEY."""
 
 import json
 import os
 import re
-import subprocess
 import urllib.error
 import urllib.request
 
 from envs import ENVS
 
-MODEL = os.environ.get("REWARD_LAB_MODEL", "claude-haiku-4-5-20251001")
 OPENROUTER_MODEL = os.environ.get("REWARD_LAB_OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
 
 PROMPT_TEMPLATE = """You translate a natural-language reward description into a Python reward \
@@ -118,31 +113,11 @@ def _generate_openrouter(prompt, timeout):
         raise GenError(f"unexpected OpenRouter response: {str(out)[:300]}")
 
 
-def _generate_claude_cli(prompt, timeout):
-    try:
-        out = subprocess.run(
-            ["claude", "-p", prompt, "--model", MODEL, "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout, cwd="/tmp",
-        )
-    except subprocess.TimeoutExpired:
-        raise GenError("Claude took too long to respond")
-    except FileNotFoundError:
-        raise GenError("`claude` CLI not found on PATH (or set OPENROUTER_API_KEY)")
-    if out.returncode != 0:
-        raise GenError(f"claude CLI failed: {out.stderr[:300]}")
-    try:
-        wrapper = json.loads(out.stdout)
-        return wrapper.get("result", "")
-    except json.JSONDecodeError:
-        return out.stdout
-
-
 def generate_reward(env_id, spec, timeout=90):
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise GenError("OPENROUTER_API_KEY is not set — export it and restart the server")
     prompt = build_prompt(env_id, spec)
-    if os.environ.get("OPENROUTER_API_KEY"):
-        result_text = _generate_openrouter(prompt, timeout)
-    else:
-        result_text = _generate_claude_cli(prompt, timeout)
+    result_text = _generate_openrouter(prompt, timeout)
     data = extract_json(result_text)
     if data.get("error"):
         raise GenError(data["error"])
