@@ -308,7 +308,6 @@ function drawWorld(w, t) {
     draw(f.dock, '🔌', .56);
     (f.dirt || []).forEach(c => draw(c, '🟤', .42));
     (f.vases || []).forEach(c => draw(c, '🏺'));
-    (f.broken || []).forEach(c => draw(c, '🫙', .4));
   } else if (env.id === 'coins') {
     draw(f.exit, '🚪', .58);
     if (f.coin) draw(f.coin, '🪙', .55);
