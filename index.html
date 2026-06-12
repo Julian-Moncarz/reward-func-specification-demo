@@ -255,7 +255,7 @@ function playWorld(w) {
   w.el.querySelector('.play').innerHTML = '&#8635; Replay';
   const t0 = performance.now();
   const tick = (now) => {
-    const target = Math.min(w.frames.length - 1, (now - t0) / (240 / w.speed));
+    const target = Math.max(0, Math.min(w.frames.length - 1, (now - t0) / (240 / w.speed)));
     const i = Math.floor(target);
     if (i > w.idx) { for (let k = w.idx + 1; k <= i; k++) onFrame(w, k); w.idx = i; }
     drawWorld(w, target);
