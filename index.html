@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reward Lab</title>
+<style>
+body { max-width: 880px; margin: 24px auto; padding: 0 16px; line-height: 1.45; }
+h1 { font-size: 1.4em; margin-bottom: 8px; }
+.muted { color: #555; font-size: 0.9em; }
+textarea { width: 100%; box-sizing: border-box; height: 56px; font: inherit; margin-top: 4px; }
+fieldset { border: 1px solid #ccc; margin: 12px 0; padding: 8px 12px; }
+legend { font-size: 0.9em; color: #555; }
+#goal { margin: 10px 0 2px; }
+#legend { font-size: 0.85em; color: #555; margin: 2px 0 14px; }
+#reward-box { display: none; border: 1px solid #999; padding: 8px 12px; margin: 12px 0; }
+#reward-box.show { display: block; }
+#reward-box .terms { font-weight: bold; }
+pre { background: #f4f4f4; padding: 8px; overflow-x: auto; font-size: 0.9em; }
+#status { margin: 8px 0; min-height: 1.2em; }
+#status.err { color: #b00020; }
+.worlds { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 4px; }
+.world { border: 1px solid #ccc; padding: 8px; }
+.world h3 { margin: 0 0 6px; font-size: 1em; font-weight: bold; }
+.world .meta { font-size: 0.95em; margin: 6px 0 4px; }
+canvas { display: block; border: 1px solid #ddd; }
+.feed { margin: 4px 0 0; padding-left: 18px; font-size: 0.85em; max-height: 120px; overflow-y: auto; }
+button { font: inherit; }
+footer { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 8px; font-size: 0.85em; color: #555; }
+</style>
+</head>
+<body>
+<h1>Reward Lab</h1>
+
+<fieldset>
+  <legend>scenario</legend>
+  <span id="envs"></span>
+</fieldset>
+
+<div class="worlds" id="world-grid"></div>
+<div id="goal"></div>
+<div id="legend"></div>
+
+<textarea id="spec"></textarea>
+<div>
+  <button id="train">Train agent</button>
+  <span class="muted">every trigger needs an explicit number, e.g. "-5 per vase broken"</span>
+</div>
+
+<div id="reward-box">
+  Reward function: <span class="terms" id="reward-terms"></span>
+  <details><summary class="muted">generated python</summary><pre id="reward-code"></pre></details>
+</div>
+
+<div id="status"></div>
+
+<footer>
+  <b>How training works:</b> your English is translated by Claude into a Python function
+  <code>reward(prev, action, state)</code> (shown above once generated). The agent is then trained from scratch with
+  tabular Q-learning: it plays the game tens of thousands of times (a few seconds, locally), starting with random moves
+  (&epsilon;-greedy exploration, decaying) and updating a lookup table
+  Q(state, action) &larr; Q + &alpha;&middot;(r + &gamma;&middot;max Q(next) &minus; Q) after every step.
+  The video is the final greedy policy: from each state it takes the action with the highest learned Q-value.
+  Nothing else is optimized &mdash; whatever you see, the reward you wrote caused it.
+</footer>
+
+<script>
+let ENVS = [], env = null, rollouts = null, speed = 1, worlds = [];
+
+const PLACEHOLDERS = {
+  cleanup: "e.g. 1 point for every piece of dirt cleaned",
+  coins: "e.g. 10 points for collecting the coin",
+};
+
+const GOALS = {
+  cleanup: "<b>The task:</b> clean all the dirt without breaking anything, then return to the charging dock.",
+  coins: "<b>The task:</b> collect the coin.",
+};
+const LEGENDS = {
+  cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🏺 vase — shatters if driven into and spills 2 new dirt · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it: dirt_in_view counts only what the camera sees, and the policy cannot see distant dirt (it knows just its position, the vases, and how much it has cleaned so far).",
+  coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot.",
+};
+
+const $ = s => document.querySelector(s);
+
+async function init() {
+  ENVS = await (await fetch('/api/envs')).json();
+  const box = $('#envs');
+  ENVS.forEach((e, i) => {
+    const l = document.createElement('label');
+    l.style.marginRight = '14px';
+    l.innerHTML = `<input type="radio" name="env" value="${e.id}" ${i === 0 ? 'checked' : ''}> ${e.icon} ${e.name}`;
+    l.querySelector('input').onchange = () => selectEnv(e.id);
+    box.appendChild(l);
+  });
+  selectEnv('cleanup');
+}
+
+function selectEnv(id) {
+  env = ENVS.find(e => e.id === id);
+  $('#spec').placeholder = PLACEHOLDERS[id] || '';
+  $('#spec').value = '';
+  $('#goal').innerHTML = GOALS[id] || '';
+  $('#legend').textContent = LEGENDS[id] || '';
+  rollouts = null;
+  $('#reward-box').classList.remove('show');
+  $('#status').textContent = '';
+  showIdleBoard();
+}
+
+/* an untrained board so you can see the game before doing anything */
+function idleFrame() {
+  const L = env.layout;
+  if (env.id === 'cleanup')
+    return {agent: L.start, dirt: L.dirt, vases: L.vases, broken: [], dock: L.dock};
+  return {agent: L.start, coin: L.coin, exit: L.exit || [7, 3]};
+}
+
+function showIdleBoard() {
+  stopAll();
+  const grid = $('#world-grid');
+  grid.innerHTML = '';
+  worlds = [];
+  const w = makeWorld('the board', [Object.assign({step: 0, reward: 0, total: 0, events: [], state: {}}, idleFrame())], false, true);
+  worlds = [w];
+  grid.appendChild(w.el);
+  drawWorld(w, 0);
+}
+
+$('#train').onclick = async () => {
+  const spec = $('#spec').value.trim();
+  if (!spec || !env) return;
+  if (!/\d/.test(spec)) {
+    setStatus(`error: every reward trigger needs an explicit number — ${PLACEHOLDERS[env.id] || 'e.g. "1 point per …"'}`, true);
+    return;
+  }
+  const btn = $('#train');
+  btn.disabled = true;
+  $('#reward-box').classList.remove('show');
+  setStatus('generating reward function…');
+  try {
+    const gen = await (await fetch('/api/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({env_id: env.id, spec})
+    })).json();
+    if (gen.error) { setStatus('error: ' + gen.error, true); return; }
+    showReward(gen);
+    await trainAndPrepare(gen.code, env);
+  } catch (e) { setStatus('error: ' + e, true); }
+  finally { btn.disabled = false; }
+};
+
+function showReward(res) {
+  $('#reward-box').classList.add('show');
+  $('#reward-terms').textContent =
+    (res.summary || []).map(s => `${s.icon || ''} ${s.text}`.trim()).join('   ·   ');
+  $('#reward-code').textContent = res.code;
+}
+
+function setStatus(msg, err) {
+  const s = $('#status');
+  s.textContent = msg; s.className = err ? 'err' : '';
+}
+
+async function trainAndPrepare(code, trainEnv) {
+  const shift = trainEnv.has_shift;
+  const resp = await fetch('/api/train', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({env_id: trainEnv.id, code, shift})
+  });
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const m = JSON.parse(line);
+      if (m.stage === 'training') {
+        setStatus(`training… episode ${m.ep.toLocaleString()} / ${m.total.toLocaleString()}`);
+      } else if (m.stage === 'error') {
+        setStatus('error: ' + m.error, true);
+      } else if (m.stage === 'done') {
+        if (env !== trainEnv) return;  // scenario switched mid-training; drop result
+        rollouts = m;
+        setStatus('trained. press play to watch the learned policy.');
+        setupArena(shift);
+      }
+    }
+  }
+}
+
+/* ------- worlds ------- */
+function stopAll() { worlds.forEach(w => { if (w.raf) cancelAnimationFrame(w.raf); w.raf = 0; }); }
+
+function setupArena(shifted) {
+  stopAll();
+  const grid = $('#world-grid');
+  grid.innerHTML = '';
+  worlds = [makeWorld('training world', rollouts.rollout, shifted)];
+  if (shifted && rollouts.shifted_rollout)
+    worlds.push(makeWorld('test world (coin at a random spot)', rollouts.shifted_rollout, shifted));
+  worlds.forEach(w => grid.appendChild(w.el));
+  worlds.forEach(w => { resetWorld(w); drawWorld(w, 0); });
+}
+
+function makeWorld(title, frames, dual, idle) {
+  const cell = dual ? 44 : 56;
+  const el = document.createElement('div');
+  el.className = 'world';
+  const controls = idle ? '' :
+    `<div class="meta"><button class="play">&#9654; Play</button>
+     <button class="spd">speed 1&times;</button>
+     &nbsp; return: <b class="val">0</b> &nbsp; step <span class="stp">0</span> / ${frames.length - 1}</div>
+     <ul class="feed"></ul>`;
+  el.innerHTML = `<h3>${title}</h3><canvas width="${8*cell}" height="${8*cell}"></canvas>${controls}`;
+  const w = {el, frames, cell, idle, raf: 0, speed: 1,
+             canvas: el.querySelector('canvas'),
+             val: el.querySelector('.val'), stp: el.querySelector('.stp'),
+             feed: el.querySelector('.feed'), floaters: [], idx: 0};
+  if (!idle) {
+    el.querySelector('.play').onclick = () => playWorld(w);
+    el.querySelector('.spd').onclick = (ev) => {
+      w.speed = w.speed === 1 ? 2 : w.speed === 2 ? 4 : 1;
+      ev.target.innerHTML = `speed ${w.speed}&times;`;
+    };
+  }
+  return w;
+}
+
+function resetWorld(w) {
+  w.idx = 0; w.floaters = [];
+  if (w.feed) w.feed.innerHTML = '';
+  if (w.val) { w.val.textContent = '0'; w.stp.textContent = '0'; }
+}
+
+const EV_LABEL = {
+  vase_broken: 'vase broken — dirt spills out',
+  dirt_cleaned: 'dirt cleaned',
+  docked: 'docked — episode over',
+  checkpoint: 'checkpoint',
+  star: 'boost star',
+  cone: 'cone knocked over',
+  finished: 'lap finished',
+  coin: 'coin collected',
+  exit: 'reached the exit — episode over',
+};
+
+function playWorld(w) {
+  if (w.raf) cancelAnimationFrame(w.raf);
+  resetWorld(w);
+  w.el.querySelector('.play').innerHTML = '&#8635; Replay';
+  const t0 = performance.now();
+  const tick = (now) => {
+    const target = Math.min(w.frames.length - 1, (now - t0) / (240 / w.speed));
+    const i = Math.floor(target);
+    if (i > w.idx) { for (let k = w.idx + 1; k <= i; k++) onFrame(w, k); w.idx = i; }
+    drawWorld(w, target);
+    if (w.idx < w.frames.length - 1) w.raf = requestAnimationFrame(tick);
+    else w.raf = 0;
+  };
+  w.raf = requestAnimationFrame(tick);
+}
+
+function onFrame(w, k) {
+  const f = w.frames[k];
+  w.val.textContent = fmt(f.total);
+  w.stp.textContent = f.step;
+  if (f.reward) w.floaters.push({x: f.agent[0], y: f.agent[1], txt: (f.reward > 0 ? '+' : '') + fmt(f.reward),
+    born: performance.now(), neg: f.reward < 0});
+  for (const ev of f.events || []) {
+    const d = document.createElement('li');
+    d.textContent = `step ${f.step}: ${EV_LABEL[ev] || ev}`;
+    w.feed.prepend(d);
+    while (w.feed.children.length > 30) w.feed.lastChild.remove();
+  }
+}
+const fmt = n => Math.abs(n % 1) < 1e-9 ? n.toFixed(0) : n.toFixed(2);
+
+function drawWorld(w, t) {
+  const cell = w.cell;
+  const ctx = w.canvas.getContext('2d');
+  const i = Math.min(Math.floor(t), w.frames.length - 1);
+  const f = w.frames[i], fn = w.frames[Math.min(i + 1, w.frames.length - 1)];
+  const frac = Math.min(t - i, 1);
+  ctx.clearRect(0, 0, 8 * cell, 8 * cell);
+
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const inFov = env.id === 'cleanup' &&
+      Math.abs(x - f.agent[0]) + Math.abs(y - f.agent[1]) <= 2;
+    ctx.fillStyle = inFov ? '#fff3c4' : '#fff';
+    ctx.fillRect(x * cell, y * cell, cell, cell);
+    ctx.strokeStyle = '#eee';
+    ctx.strokeRect(x * cell + .5, y * cell + .5, cell, cell);
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const draw = (c, emoji, scale = .62, alpha = 1) => {
+    ctx.globalAlpha = alpha;
+    ctx.font = `${cell * scale}px serif`;
+    ctx.fillText(emoji, c[0] * cell + cell/2, c[1] * cell + cell/2 + 1);
+    ctx.globalAlpha = 1;
+  };
+
+  if (env.id === 'cleanup') {
+    draw(f.dock, '🔌', .56);
+    (f.dirt || []).forEach(c => draw(c, '🟤', .42));
+    (f.vases || []).forEach(c => draw(c, '🏺'));
+    (f.broken || []).forEach(c => draw(c, '🫙', .4));
+  } else if (env.id === 'coins') {
+    draw(f.exit, '🚪', .58);
+    if (f.coin) draw(f.coin, '🪙', .55);
+  }
+
+  const ax = (f.agent[0] + (fn.agent[0] - f.agent[0]) * frac) * cell + cell/2;
+  const ay = (f.agent[1] + (fn.agent[1] - f.agent[1]) * frac) * cell + cell/2;
+  ctx.font = `${cell * .66}px serif`;
+  ctx.fillText('🤖', ax, ay + 1);
+
+  const now = performance.now();
+  w.floaters = w.floaters.filter(fl => now - fl.born < 850);
+  for (const fl of w.floaters) {
+    const age = (now - fl.born) / 850;
+    ctx.globalAlpha = 1 - age;
+    ctx.font = `bold ${cell * .28}px sans-serif`;
+    ctx.fillStyle = fl.neg ? '#b00020' : '#1a7f37';
+    ctx.fillText(fl.txt, fl.x * cell + cell/2, fl.y * cell + 6 - age * 24);
+    ctx.globalAlpha = 1;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
