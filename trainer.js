@@ -55,7 +55,17 @@
       throw new RewardError("reward function must return a finite number, got " + r);
   }
 
-  const sleep = () => new Promise((res) => setTimeout(res, 0));
+  // Yield a macrotask so the page can repaint. MessageChannel is NOT throttled
+  // in backgrounded/occluded tabs the way setTimeout(0) is (clamped to ~1s),
+  // so training stays fast even when the tab isn't focused. Falls back to
+  // setTimeout where MessageChannel is unavailable (e.g. older Node).
+  const sleep = (typeof MessageChannel !== "undefined")
+    ? () => new Promise((res) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => { ch.port1.close(); res(); };
+        ch.port2.postMessage(0);
+      })
+    : () => new Promise((res) => setTimeout(res, 0));
 
   /* Q-learning. Returns the Q-table (Map<obsKey, [4]>). Awaits a yield to the
    * event loop every `yieldEvery` episodes so the page stays responsive and
