@@ -5,12 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Reward Lab</title>
 <style>
-body { max-width: 880px; margin: 24px auto; padding: 0 16px; line-height: 1.45; }
+body { max-width: 880px; margin: 24px auto; padding: 0 16px; line-height: 1.45; font-family: system-ui, sans-serif; }
 h1 { font-size: 1.4em; margin-bottom: 8px; }
 .muted { color: #555; font-size: 0.9em; }
+a { color: #1a56b8; }
 textarea { width: 100%; box-sizing: border-box; height: 56px; font: inherit; margin-top: 4px; }
 fieldset { border: 1px solid #ccc; margin: 12px 0; padding: 8px 12px; }
 legend { font-size: 0.9em; color: #555; }
+#key-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#key { flex: 1 1 280px; box-sizing: border-box; font: inherit; padding: 4px 6px; }
+#model { flex: 0 1 220px; box-sizing: border-box; font: inherit; padding: 4px 6px; }
 #goal { margin: 10px 0 2px; }
 #legend { font-size: 0.85em; color: #555; margin: 2px 0 14px; }
 #reward-box { display: none; border: 1px solid #999; padding: 8px 12px; margin: 12px 0; }
@@ -31,6 +35,24 @@ footer { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 8px; font-si
 </head>
 <body>
 <h1>Reward Lab</h1>
+<p class="muted">Write a reward in plain English, an LLM turns it into a reward function, then an agent
+is trained from scratch on it — live, in your browser. Watch what the reward you wrote
+<em>actually</em> makes the agent do.</p>
+
+<fieldset>
+  <legend>OpenRouter API key (used only in your browser, sent only to openrouter.ai)</legend>
+  <div id="key-row">
+    <input id="key" type="password" autocomplete="off" placeholder="sk-or-...">
+    <input id="model" type="text" autocomplete="off" placeholder="anthropic/claude-haiku-4.5">
+    <label class="muted"><input type="checkbox" id="remember"> remember on this device</label>
+    <button id="forget" type="button">forget</button>
+  </div>
+  <div class="muted" style="margin-top:4px">
+    Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.
+    By default it lives only in this tab and is asked for again next visit; "remember" stores it in this
+    browser's localStorage. It is never sent anywhere but OpenRouter.
+  </div>
+</fieldset>
 
 <fieldset>
   <legend>scenario</legend>
@@ -49,29 +71,31 @@ footer { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 8px; font-si
 
 <div id="reward-box">
   Reward function: <span class="terms" id="reward-terms"></span>
-  <details><summary class="muted">generated python</summary><pre id="reward-code"></pre></details>
+  <details><summary class="muted">generated javascript</summary><pre id="reward-code"></pre></details>
 </div>
 
 <div id="status"></div>
 
 <footer>
-  <b>How training works:</b> your English is translated by Claude into a Python function
-  <code>reward(prev, action, state)</code> (shown above once generated). The agent is then trained from scratch with
-  tabular Q-learning: it plays the game tens of thousands of times (a few seconds, locally), starting with random moves
-  (&epsilon;-greedy exploration, decaying) and updating a lookup table
+  <b>How training works:</b> your English is translated by an LLM (through your OpenRouter key) into a
+  JavaScript function <code>reward(prev, action, state)</code> (shown above once generated). The agent is then
+  trained from scratch with tabular Q-learning, all in your browser: it plays the game tens of thousands of times
+  (a few seconds), starting with random moves (&epsilon;-greedy exploration, decaying) and updating a lookup table
   Q(state, action) &larr; Q + &alpha;&middot;(r + &gamma;&middot;max Q(next) &minus; Q) after every step.
   The video is the final greedy policy: from each state it takes the action with the highest learned Q-value.
   Nothing else is optimized &mdash; whatever you see, the reward you wrote caused it.
 </footer>
 
+<script src="envs.js"></script>
+<script src="trainer.js"></script>
+<script src="rewardgen.js"></script>
 <script>
-let ENVS = [], env = null, rollouts = null, speed = 1, worlds = [];
+let ENVS = [], env = null, rollouts = null, worlds = [];
 
 const PLACEHOLDERS = {
   cleanup: "e.g. 1 point for every piece of dirt cleaned",
   coins: "e.g. 10 points for collecting the coin",
 };
-
 const GOALS = {
   cleanup: "<b>The task:</b> clean all the dirt without breaking anything, then return to the charging dock.",
   coins: "<b>The task:</b> collect the coin.",
@@ -83,8 +107,34 @@ const LEGENDS = {
 
 const $ = s => document.querySelector(s);
 
-async function init() {
-  ENVS = await (await fetch('/api/envs')).json();
+/* ------- API key handling ------- */
+const KEY_STORE = 'rewardlab_openrouter_key';
+function getKey() { return $('#key').value.trim(); }
+function getModel() { return $('#model').value.trim() || undefined; }
+function initKey() {
+  const saved = localStorage.getItem(KEY_STORE);
+  if (saved) { $('#key').value = saved; $('#remember').checked = true; }
+  $('#remember').onchange = () => {
+    if ($('#remember').checked && getKey()) localStorage.setItem(KEY_STORE, getKey());
+    else localStorage.removeItem(KEY_STORE);
+  };
+  $('#key').oninput = () => {
+    if ($('#remember').checked) {
+      if (getKey()) localStorage.setItem(KEY_STORE, getKey());
+      else localStorage.removeItem(KEY_STORE);
+    }
+  };
+  $('#forget').onclick = () => {
+    $('#key').value = ''; $('#remember').checked = false;
+    localStorage.removeItem(KEY_STORE);
+    setStatus('key forgotten');
+  };
+}
+
+function init() {
+  ENVS = REWARDLAB_ENVS.envMeta();
+  $('#model').placeholder = REWARDLAB_GEN.DEFAULT_MODEL;
+  initKey();
   const box = $('#envs');
   ENVS.forEach((e, i) => {
     const l = document.createElement('label');
@@ -129,7 +179,9 @@ function showIdleBoard() {
 
 $('#train').onclick = async () => {
   const spec = $('#spec').value.trim();
-  if (!spec || !env) return;
+  if (!env) return;
+  if (!getKey()) { setStatus('error: enter your OpenRouter API key first', true); return; }
+  if (!spec) { setStatus('error: describe a reward first', true); return; }
   if (!/\d/.test(spec)) {
     setStatus(`error: every reward trigger needs an explicit number — ${PLACEHOLDERS[env.id] || 'e.g. "1 point per …"'}`, true);
     return;
@@ -138,15 +190,13 @@ $('#train').onclick = async () => {
   btn.disabled = true;
   $('#reward-box').classList.remove('show');
   setStatus('generating reward function…');
+  const trainEnv = env;
   try {
-    const gen = await (await fetch('/api/generate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({env_id: env.id, spec})
-    })).json();
-    if (gen.error) { setStatus('error: ' + gen.error, true); return; }
+    const gen = await REWARDLAB_GEN.generateReward(env.id, spec, getKey(), getModel());
+    if (env !== trainEnv) return;  // scenario switched mid-request
     showReward(gen);
-    await trainAndPrepare(gen.code, env);
-  } catch (e) { setStatus('error: ' + e, true); }
+    await trainAndPrepare(gen.code, trainEnv);
+  } catch (e) { setStatus('error: ' + (e.message || e), true); }
   finally { btn.disabled = false; }
 };
 
@@ -163,34 +213,27 @@ function setStatus(msg, err) {
 }
 
 async function trainAndPrepare(code, trainEnv) {
+  const T = REWARDLAB_TRAINER;
+  let fn;
+  try {
+    fn = T.compileReward(code);
+    T.validateReward(trainEnv.id, fn);
+  } catch (e) { setStatus('error: ' + e.message, true); return; }
+
+  const progress = (ep, total) => {
+    if (env === trainEnv) setStatus(`training… episode ${ep.toLocaleString()} / ${total.toLocaleString()}`);
+  };
+  let Q;
+  try {
+    Q = await T.train(trainEnv.id, fn, {progress});
+  } catch (e) { setStatus('error: ' + e.message, true); return; }
+  if (env !== trainEnv) return;  // scenario switched mid-training; drop result
+
   const shift = trainEnv.has_shift;
-  const resp = await fetch('/api/train', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({env_id: trainEnv.id, code, shift})
-  });
-  const reader = resp.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, {stream: true});
-    const lines = buf.split('\n'); buf = lines.pop();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const m = JSON.parse(line);
-      if (m.stage === 'training') {
-        setStatus(`training… episode ${m.ep.toLocaleString()} / ${m.total.toLocaleString()}`);
-      } else if (m.stage === 'error') {
-        setStatus('error: ' + m.error, true);
-      } else if (m.stage === 'done') {
-        if (env !== trainEnv) return;  // scenario switched mid-training; drop result
-        rollouts = m;
-        setStatus('trained. press play to watch the learned policy.');
-        setupArena(shift);
-      }
-    }
-  }
+  rollouts = {rollout: T.rollout(trainEnv.id, Q, fn)};
+  if (shift) rollouts.shifted_rollout = T.rollout(trainEnv.id, Q, fn, {shift: true});
+  setStatus('trained. press play to watch the learned policy.');
+  setupArena(shift);
 }
 
 /* ------- worlds ------- */
@@ -241,10 +284,6 @@ const EV_LABEL = {
   plant_broken: 'plant knocked over — soil spills out',
   dirt_cleaned: 'dirt cleaned',
   docked: 'docked — episode over',
-  checkpoint: 'checkpoint',
-  star: 'boost star',
-  cone: 'cone knocked over',
-  finished: 'lap finished',
   coin: 'coin collected',
   exit: 'reached the exit — episode over',
 };
