@@ -6,17 +6,17 @@
 <title>Reward Lab</title>
 <style>
 body { max-width: 880px; margin: 24px auto; padding: 0 16px; line-height: 1.45; font-family: system-ui, sans-serif; }
-h1 { font-size: 1.4em; margin-bottom: 8px; }
+h1 { font-size: 1.4em; margin: 0; }
+.topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sub { color: #555; font-size: 0.92em; margin: 4px 0 16px; }
 .muted { color: #555; font-size: 0.9em; }
 a { color: #1a56b8; }
 textarea { width: 100%; box-sizing: border-box; height: 56px; font: inherit; margin-top: 4px; }
-fieldset { border: 1px solid #ccc; margin: 12px 0; padding: 8px 12px; }
-legend { font-size: 0.9em; color: #555; }
-#key-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-#key { flex: 1 1 280px; box-sizing: border-box; font: inherit; padding: 4px 6px; }
-#model { flex: 0 1 220px; box-sizing: border-box; font: inherit; padding: 4px 6px; }
-#goal { margin: 10px 0 2px; }
-#legend { font-size: 0.85em; color: #555; margin: 2px 0 14px; }
+#envs label { margin-right: 16px; }
+#goal { margin: 12px 0 2px; }
+#legend { font-size: 0.85em; color: #555; margin: 4px 0; }
+details { margin: 8px 0; }
+summary { cursor: pointer; color: #555; font-size: 0.9em; }
 #reward-box { display: none; border: 1px solid #999; padding: 8px 12px; margin: 12px 0; }
 #reward-box.show { display: block; }
 #reward-box .terms { font-weight: bold; }
@@ -30,61 +30,65 @@ pre { background: #f4f4f4; padding: 8px; overflow-x: auto; font-size: 0.9em; }
 canvas { display: block; border: 1px solid #ddd; }
 .feed { margin: 4px 0 0; padding-left: 18px; font-size: 0.85em; max-height: 120px; overflow-y: auto; }
 button { font: inherit; }
-footer { margin-top: 28px; border-top: 1px solid #ccc; padding-top: 8px; font-size: 0.85em; color: #555; }
+.linkbtn { background: none; border: none; color: #1a56b8; cursor: pointer; padding: 0; font-size: 0.9em; }
+/* key modal */
+#key-modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+#key-modal.hidden { display: none; }
+#key-card { background: #fff; padding: 20px 22px; max-width: 380px; width: calc(100% - 40px); border-radius: 8px; }
+#key-card h2 { font-size: 1.1em; margin: 0 0 10px; }
+#key-card input[type=password], #key-card input[type=text] { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; margin-bottom: 8px; }
+#key-card .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 </style>
 </head>
 <body>
-<h1>Reward Lab</h1>
-<p class="muted">Write a reward in plain English, an LLM turns it into a reward function, then an agent
-is trained from scratch on it — live, in your browser. Watch what the reward you wrote
-<em>actually</em> makes the agent do.</p>
 
-<fieldset>
-  <legend>OpenRouter API key (used only in your browser, sent only to openrouter.ai)</legend>
-  <div id="key-row">
-    <input id="key" type="password" autocomplete="off" placeholder="sk-or-...">
-    <input id="model" type="text" autocomplete="off" placeholder="anthropic/claude-haiku-4.5">
-    <label class="muted"><input type="checkbox" id="remember"> remember on this device</label>
-    <button id="forget" type="button">forget</button>
-  </div>
-  <div class="muted" style="margin-top:4px">
-    Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.
-    By default it lives only in this tab and is asked for again next visit; "remember" stores it in this
-    browser's localStorage. It is never sent anywhere but OpenRouter.
-  </div>
-</fieldset>
+<div class="topbar">
+  <h1>Reward Lab</h1>
+  <button class="linkbtn" id="open-key">🔑 key</button>
+</div>
+<p class="sub">Write a reward in plain English; watch what the agent <em>actually</em> learns.</p>
 
-<fieldset>
-  <legend>scenario</legend>
-  <span id="envs"></span>
-</fieldset>
+<div id="envs"></div>
 
 <div class="worlds" id="world-grid"></div>
 <div id="goal"></div>
-<div id="legend"></div>
+<details><summary>legend</summary><div id="legend"></div></details>
 
 <textarea id="spec"></textarea>
-<div>
-  <button id="train">Train agent</button>
-  <span class="muted">every trigger needs an explicit number, e.g. "-5 per plant knocked over"</span>
-</div>
+<div><button id="train">Train agent</button></div>
 
 <div id="reward-box">
   Reward function: <span class="terms" id="reward-terms"></span>
-  <details><summary class="muted">generated javascript</summary><pre id="reward-code"></pre></details>
+  <details><summary>generated javascript</summary><pre id="reward-code"></pre></details>
 </div>
 
 <div id="status"></div>
 
-<footer>
-  <b>How training works:</b> your English is translated by an LLM (through your OpenRouter key) into a
-  JavaScript function <code>reward(prev, action, state)</code> (shown above once generated). The agent is then
-  trained from scratch with tabular Q-learning, all in your browser: it plays the game tens of thousands of times
-  (a few seconds), starting with random moves (&epsilon;-greedy exploration, decaying) and updating a lookup table
-  Q(state, action) &larr; Q + &alpha;&middot;(r + &gamma;&middot;max Q(next) &minus; Q) after every step.
-  The video is the final greedy policy: from each state it takes the action with the highest learned Q-value.
-  Nothing else is optimized &mdash; whatever you see, the reward you wrote caused it.
-</footer>
+<details>
+  <summary>how training works</summary>
+  <p class="muted">Your English is translated by an LLM (through your OpenRouter key) into a JavaScript
+  function <code>reward(prev, action, state)</code>. The agent is then trained from scratch with tabular
+  Q-learning, in your browser: it plays tens of thousands of times, starting with random moves
+  (&epsilon;-greedy, decaying) and updating a table Q(state, action) &larr; Q + &alpha;&middot;(r +
+  &gamma;&middot;max Q(next) &minus; Q) after every step. The video is the final greedy policy &mdash;
+  whatever you see, the reward you wrote caused it.</p>
+</details>
+
+<!-- API key modal -->
+<div id="key-modal" class="hidden">
+  <div id="key-card">
+    <h2>OpenRouter API key</h2>
+    <input id="key" type="password" autocomplete="off" placeholder="sk-or-...">
+    <input id="model" type="text" autocomplete="off" placeholder="anthropic/claude-haiku-4.5">
+    <div class="row">
+      <label class="muted"><input type="checkbox" id="remember"> remember on this device</label>
+      <button id="key-ok">Continue</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Used only in your browser, sent only to
+      <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai</a>.
+      <button class="linkbtn" id="forget">forget key</button></p>
+  </div>
+</div>
 
 <script src="envs.js"></script>
 <script src="trainer.js"></script>
@@ -97,12 +101,12 @@ const PLACEHOLDERS = {
   coins: "e.g. 10 points for collecting the coin",
 };
 const GOALS = {
-  cleanup: "<b>The task:</b> clean all the dirt without breaking anything, then return to the charging dock.",
-  coins: "<b>The task:</b> collect the coin.",
+  cleanup: "<b>Task:</b> clean all the dirt without breaking anything, then return to the dock.",
+  coins: "<b>Task:</b> collect the coin.",
 };
 const LEGENDS = {
-  cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🪴 potted plant — knocked over if driven into, spilling soil on 2 tiles · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it: dirt_in_view counts only what the camera sees, and the policy cannot see distant dirt (it knows just its position, the plants, and how much it has cleaned so far).",
-  coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot. The policy CAN see the coin's position — but since the coin never moves during training, it gets no chance to learn what that input means.",
+  cleanup: "🤖 robot (starts top-left) · 🟤 dirt — cleaned by driving over it · 🪴 potted plant — knocked over if driven into, spilling soil on 2 tiles · 🔌 dock — ends the episode · 80-step limit. The shaded square is the robot's camera field of view — it has NO access to dirt outside it.",
+  coins: "🤖 agent (starts mid-left) · 🪙 coin · 🚪 exit — ends the episode · 40-step limit. During training the coin always sits next to the exit; the test board drops it at a random spot. The policy can see the coin's position, but since the coin never moves during training, it never learns what that input means.",
 };
 
 const $ = s => document.querySelector(s);
@@ -111,23 +115,23 @@ const $ = s => document.querySelector(s);
 const KEY_STORE = 'rewardlab_openrouter_key';
 function getKey() { return $('#key').value.trim(); }
 function getModel() { return $('#model').value.trim() || undefined; }
+function syncRemember() {
+  if ($('#remember').checked && getKey()) localStorage.setItem(KEY_STORE, getKey());
+  else localStorage.removeItem(KEY_STORE);
+}
+function showKeyModal() { $('#key-modal').classList.remove('hidden'); $('#key').focus(); }
+function hideKeyModal() { $('#key-modal').classList.add('hidden'); }
 function initKey() {
   const saved = localStorage.getItem(KEY_STORE);
   if (saved) { $('#key').value = saved; $('#remember').checked = true; }
-  $('#remember').onchange = () => {
-    if ($('#remember').checked && getKey()) localStorage.setItem(KEY_STORE, getKey());
-    else localStorage.removeItem(KEY_STORE);
-  };
-  $('#key').oninput = () => {
-    if ($('#remember').checked) {
-      if (getKey()) localStorage.setItem(KEY_STORE, getKey());
-      else localStorage.removeItem(KEY_STORE);
-    }
-  };
+  else showKeyModal();
+  $('#remember').onchange = syncRemember;
+  $('#key').oninput = () => { if ($('#remember').checked) syncRemember(); };
+  $('#key-ok').onclick = hideKeyModal;
+  $('#open-key').onclick = showKeyModal;
   $('#forget').onclick = () => {
     $('#key').value = ''; $('#remember').checked = false;
     localStorage.removeItem(KEY_STORE);
-    setStatus('key forgotten');
   };
 }
 
@@ -138,7 +142,6 @@ function init() {
   const box = $('#envs');
   ENVS.forEach((e, i) => {
     const l = document.createElement('label');
-    l.style.marginRight = '14px';
     l.innerHTML = `<input type="radio" name="env" value="${e.id}" ${i === 0 ? 'checked' : ''}> ${e.icon} ${e.name}`;
     l.querySelector('input').onchange = () => selectEnv(e.id);
     box.appendChild(l);
@@ -180,7 +183,7 @@ function showIdleBoard() {
 $('#train').onclick = async () => {
   const spec = $('#spec').value.trim();
   if (!env) return;
-  if (!getKey()) { setStatus('error: enter your OpenRouter API key first', true); return; }
+  if (!getKey()) { showKeyModal(); setStatus('enter your OpenRouter API key to train', true); return; }
   if (!spec) { setStatus('error: describe a reward first', true); return; }
   if (!/\d/.test(spec)) {
     setStatus(`error: every reward trigger needs an explicit number — ${PLACEHOLDERS[env.id] || 'e.g. "1 point per …"'}`, true);
@@ -256,28 +259,21 @@ function makeWorld(title, frames, dual, idle) {
   el.className = 'world';
   const controls = idle ? '' :
     `<div class="meta"><button class="play">&#9654; Play</button>
-     <button class="spd">speed 1&times;</button>
-     &nbsp; return: <b class="val">0</b> &nbsp; step <span class="stp">0</span> / ${frames.length - 1}</div>
+     &nbsp; reward: <b class="val">0</b></div>
      <ul class="feed"></ul>`;
   el.innerHTML = `<h3>${title}</h3><canvas width="${8*cell}" height="${8*cell}"></canvas>${controls}`;
   const w = {el, frames, cell, idle, raf: 0, speed: 1,
              canvas: el.querySelector('canvas'),
-             val: el.querySelector('.val'), stp: el.querySelector('.stp'),
+             val: el.querySelector('.val'),
              feed: el.querySelector('.feed'), floaters: [], idx: 0};
-  if (!idle) {
-    el.querySelector('.play').onclick = () => playWorld(w);
-    el.querySelector('.spd').onclick = (ev) => {
-      w.speed = w.speed === 1 ? 2 : w.speed === 2 ? 4 : 1;
-      ev.target.innerHTML = `speed ${w.speed}&times;`;
-    };
-  }
+  if (!idle) el.querySelector('.play').onclick = () => playWorld(w);
   return w;
 }
 
 function resetWorld(w) {
   w.idx = 0; w.floaters = [];
   if (w.feed) w.feed.innerHTML = '';
-  if (w.val) { w.val.textContent = '0'; w.stp.textContent = '0'; }
+  if (w.val) w.val.textContent = '0';
 }
 
 const EV_LABEL = {
@@ -307,7 +303,6 @@ function playWorld(w) {
 function onFrame(w, k) {
   const f = w.frames[k];
   w.val.textContent = fmt(f.total);
-  w.stp.textContent = f.step;
   if (f.reward) w.floaters.push({x: f.agent[0], y: f.agent[1], txt: (f.reward > 0 ? '+' : '') + fmt(f.reward),
     born: performance.now(), neg: f.reward < 0});
   for (const ev of f.events || []) {
